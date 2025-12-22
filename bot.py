@@ -15,6 +15,7 @@ from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 import requests
 
 # Configure logging
@@ -72,7 +73,8 @@ def setup_chrome_driver(label: str) -> webdriver.Chrome:
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1920,1080')
     
-    driver = webdriver.Chrome(options=chrome_options)
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
 
@@ -252,8 +254,9 @@ def periodic_screenshot_thread(stop_event: threading.Event):
                     if screenshot_path:
                         # Prepare caption
                         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        interval_minutes = CONFIG.periodic_screenshot_interval // 60
                         caption = (
-                            f"📸 Periodic Check (30min)\n"
+                            f"📸 Periodic Check ({interval_minutes}min)\n"
                             f"Account: {label}\n"
                             f"Time: {current_time}\n"
                             f"URL: {driver_info['url']}"
@@ -362,9 +365,9 @@ def run_multi_three_accounts():
         # Main loop - keep running
         logger.info("Bot is running. Press Ctrl+C to stop...")
         while True:
-            time.sleep(60)  # Sleep for 1 minute
+            time.sleep(300)  # Sleep for 5 minutes
             
-            # Periodic slot check (every 5 minutes)
+            # Periodic slot check
             with DRIVERS_LOCK:
                 for label, driver in list(DRIVERS_MAP.items()):
                     try:

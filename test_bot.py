@@ -27,7 +27,7 @@ def test_config():
     assert config.periodic_screenshot_interval == 1800
     
     assert hasattr(config, 'enable_periodic_screenshots')
-    assert config.enable_periodic_screenshots == True
+    assert config.enable_periodic_screenshots is True
     
     assert hasattr(config, 'telegram_bot_token')
     assert hasattr(config, 'telegram_chat_id')

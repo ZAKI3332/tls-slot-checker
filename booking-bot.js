@@ -88,6 +88,30 @@ class TLSBookingBot {
       });
 
       const response = await this.makeRequest(`${url}?${params}`);
+      
+      // Check response status
+      if (!response.ok) {
+        console.error(`❌ API returned error: ${response.status} ${response.statusText}`);
+        return [];
+      }
+      
+      // Check content type before parsing JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.error(`❌ API returned unexpected content type: ${contentType}`);
+        console.error('💡 The server might require authentication. Trying to login...');
+        
+        // Try to login if credentials are provided
+        if (this.config.email && this.config.password) {
+          const loginSuccess = await this.login();
+          if (loginSuccess) {
+            console.log('🔄 Retrying slot check after login...');
+            return await this.checkAvailableSlots();
+          }
+        }
+        return [];
+      }
+      
       const data = await response.json();
 
       const availableSlots = [];
@@ -103,6 +127,11 @@ class TLSBookingBot {
       return availableSlots;
     } catch (error) {
       console.error('❌ Error checking slots:', error.message);
+      if (error.message.includes('Unexpected token')) {
+        console.error('💡 The API returned HTML instead of JSON.');
+        console.error('💡 This usually means authentication is required.');
+        console.error('💡 Make sure your email and password are set in config.js');
+      }
       return [];
     }
   }

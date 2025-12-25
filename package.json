@@ -1,13 +1,26 @@
 {
   "name": "tls-slot-checker",
-  "version": "1.0.0",
-  "description": "Surveillance automatique des créneaux TLScontact",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "Automated booking bot for TLS Contact appointments with slot monitoring and automatic booking",
+  "main": "bot.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "bot": "node bot.js",
+    "check": "node index.js"
   },
+  "keywords": [
+    "tls",
+    "appointment",
+    "booking",
+    "automation",
+    "bot",
+    "visa"
+  ],
   "dependencies": {
     "node-fetch": "^3.3.1"
   },
-  "type": "module"
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

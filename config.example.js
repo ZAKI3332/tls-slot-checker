@@ -38,7 +38,7 @@ export default {
    */
   firstName: 'YOUR_FIRST_NAME',
   lastName: 'YOUR_LAST_NAME',
-  email: 'your.email@example.com',
+  email: 'your.email@example.com',  // Used for both contact and login
   phone: '+213XXXXXXXXX',
   
   /**
@@ -54,11 +54,10 @@ export default {
   // ============================================
   
   /**
-   * If the site requires login, provide credentials
+   * If the site requires login, provide password
    * Leave empty if no login is required
    */
-  email: 'your.email@example.com',  // Used for both contact and login
-  password: '', // Only if login is required
+  password: '', // Only if login is required (email is used from above)
   
   // ============================================
   // BOT BEHAVIOR

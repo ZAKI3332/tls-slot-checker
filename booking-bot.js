@@ -168,7 +168,7 @@ class TLSBookingBot {
       }
 
       const reserveData = await reserveResponse.json();
-      console.log('✅ Slot reserved:', reserveData);
+      console.log('✅ Slot reserved successfully');
 
       // Step 2: Submit appointment details
       const bookingUrl = `${this.baseUrl}/services/customerservice/api/tls/appointment/book`;
@@ -194,7 +194,10 @@ class TLSBookingBot {
       if (bookingResponse.ok) {
         const bookingData = await bookingResponse.json();
         console.log('🎉 Appointment booked successfully!');
-        console.log('📋 Booking details:', bookingData);
+        // Log only confirmation number, not full personal details
+        if (bookingData.confirmationNumber) {
+          console.log('📋 Confirmation number:', bookingData.confirmationNumber);
+        }
         return { success: true, data: bookingData };
       } else {
         const errorText = await bookingResponse.text();
@@ -314,7 +317,9 @@ class TLSBookingBot {
     try {
       let text = message;
       if (data) {
-        text += '\n\n' + JSON.stringify(data, null, 2);
+        // Filter sensitive data before sending
+        const safeData = this.filterSensitiveData(data);
+        text += '\n\n' + JSON.stringify(safeData, null, 2);
       }
 
       const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendMessage`;
@@ -330,6 +335,51 @@ class TLSBookingBot {
     } catch (error) {
       console.error('❌ Failed to send Telegram notification:', error.message);
     }
+  }
+
+  /**
+   * Filter sensitive data from objects before sending in notifications
+   */
+  filterSensitiveData(data) {
+    if (!data) return data;
+    
+    // If it's an array, filter each item
+    if (Array.isArray(data)) {
+      return data.map(item => this.filterSensitiveData(item));
+    }
+    
+    // If it's not an object, return as is
+    if (typeof data !== 'object') {
+      return data;
+    }
+    
+    // Create a safe copy without sensitive fields
+    const filtered = { ...data };
+    
+    // List of sensitive field names to remove
+    const sensitiveFields = [
+      'password',
+      'passportNumber',
+      'passport_number',
+      'email',  // Partial masking would be better, but removal is safer
+      'phone',
+      'dateOfBirth',
+      'date_of_birth',
+      'reservationId',
+      'reservation_id',
+      'token',
+      'sessionId',
+      'session_id'
+    ];
+    
+    // Remove sensitive fields
+    sensitiveFields.forEach(field => {
+      if (filtered[field]) {
+        delete filtered[field];
+      }
+    });
+    
+    return filtered;
   }
 
   /**

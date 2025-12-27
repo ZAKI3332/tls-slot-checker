@@ -7,6 +7,22 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 async function checkSlots() {
   try {
     const res = await fetch(API_URL);
+    
+    // Check if response is OK
+    if (!res.ok) {
+      console.error(`❌ API returned error: ${res.status} ${res.statusText}`);
+      return;
+    }
+    
+    // Check content type before parsing JSON
+    const contentType = res.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      console.error(`❌ API returned unexpected content type: ${contentType}`);
+      console.error('💡 The API might require authentication or the endpoint has changed.');
+      console.error('💡 Try using the full bot (npm run bot) which handles session/login.');
+      return;
+    }
+    
     const data = await res.json();
 
     const slots = [];
@@ -26,7 +42,13 @@ async function checkSlots() {
       console.log(`[${new Date().toISOString()}] Aucun créneau trouvé.`);
     }
   } catch (err) {
-    console.error('Erreur lors de la vérification :', err);
+    console.error('Erreur lors de la vérification :', err.message);
+    if (err.message.includes('Unexpected token')) {
+      console.error('\n💡 The API returned HTML instead of JSON. This usually means:');
+      console.error('   1. The API requires authentication (login)');
+      console.error('   2. You need to use the full bot: npm run bot');
+      console.error('   3. The bot will handle session cookies and login automatically\n');
+    }
   }
 }
 

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "bot": "node bot.js",
+    "multi": "node bot-multi.js",
     "check": "node index.js"
   },
   "keywords": [
@@ -14,7 +15,8 @@
     "booking",
     "automation",
     "bot",
-    "visa"
+    "visa",
+    "multi-account"
   ],
   "dependencies": {
     "node-fetch": "^3.3.1"

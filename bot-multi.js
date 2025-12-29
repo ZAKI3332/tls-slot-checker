@@ -1,8 +1,9 @@
-import MultiAccountBookingBot from './multi-account-bot.js';
+import MultiBrowserBookingBot from './multi-browser-bot.js';
 
 /**
- * Multi-Account Bot Launcher
- * Run with: node bot-multi.js
+ * Multi-Account Browser Bot Launcher
+ * Now uses Puppeteer with stealth plugin to bypass Cloudflare
+ * Run with: node bot-multi.js or npm run multi
  */
 
 async function main() {
@@ -29,14 +30,16 @@ async function main() {
     }
 
     // Validate required fields for each account
-    const requiredFields = ['email', 'firstName', 'lastName', 'phone'];
+    const requiredFields = ['email', 'password', 'firstName', 'lastName', 'phone'];
     for (let i = 0; i < accounts.length; i++) {
       const account = accounts[i];
       const missingFields = requiredFields.filter(field => 
         !account[field] || 
         account[field] === 'YOUR_FIRST_NAME' || 
         account[field] === 'YOUR_LAST_NAME' ||
-        account[field] === '+213XXXXXXXXX'
+        account[field] === '+213XXXXXXXXX' ||
+        account[field] === 'your.email@example.com' ||
+        account[field] === 'YourPassword123'
       );
       
       if (missingFields.length > 0) {
@@ -49,7 +52,7 @@ async function main() {
 
     // Display configuration summary
     console.log('\n' + '='.repeat(70));
-    console.log('🤖 MULTI-ACCOUNT TLS APPOINTMENT BOOKING BOT');
+    console.log('🤖 MULTI-ACCOUNT BROWSER-BASED BOOKING BOT');
     console.log('='.repeat(70));
     console.log('📋 Configuration Summary:');
     console.log(`   Total Accounts: ${accounts.length}`);
@@ -63,6 +66,7 @@ async function main() {
     console.log(`\n   Form Group ID: ${config.formGroupId}`);
     console.log(`   Appointment Type: ${config.appointmentType}`);
     console.log(`   Auto-book: ${config.autoBook ? '✅ Enabled' : '❌ Disabled'}`);
+    console.log(`   Mode: 🌐 Browser-based (bypasses Cloudflare)`);
     console.log(`\n   ⚡ PRIMARY check interval: ${config.primaryCheckInterval || 100}ms (0.${(config.primaryCheckInterval || 100)/10}s)`);
     console.log(`   🐌 SECONDARY check interval: ${config.secondaryCheckInterval || 300000}ms (${(config.secondaryCheckInterval || 300000)/60000} min)`);
     console.log(`\n   Telegram notifications: ${config.telegramBotToken ? '✅ Enabled' : '❌ Disabled'}`);
@@ -71,10 +75,9 @@ async function main() {
     console.log('   1. PRIMARY account checks aggressively every 0.1 seconds');
     console.log('   2. SECONDARY accounts stay on standby (check every 5 min)');
     console.log('   3. When PRIMARY finds slots:');
-    console.log('      - PRIMARY tries to book immediately');
-    console.log('      - If fails, triggers ALL secondary accounts');
-    console.log('      - All accounts compete in parallel');
+    console.log('      - All accounts immediately compete in parallel');
     console.log('      - First successful booking wins!');
+    console.log('   4. Browser automation bypasses Cloudflare protection');
     console.log('='.repeat(70) + '\n');
 
     // Warning about aggressive checking
@@ -83,9 +86,22 @@ async function main() {
       console.log('   This may cause rate limiting. Recommended: 100-500ms\n');
     }
 
-    // Create and start the multi-account bot
-    const bot = new MultiAccountBookingBot(accounts, config);
-    await bot.start();
+    // Create and start the multi-browser bot
+    const bot = new MultiBrowserBookingBot(accounts, config);
+    
+    // Handle graceful shutdown
+    const cleanup = async () => {
+      console.log('\n\n🧹 Shutting down gracefully...');
+      await bot.stopAllBots();
+      console.log('👋 Multi-account bot stopped. Goodbye!');
+      process.exit(0);
+    };
+    
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    
+    // Start the bot
+    await bot.startMultiAccountBot();
 
   } catch (error) {
     console.error('❌ Fatal error:', error);
@@ -93,17 +109,6 @@ async function main() {
     process.exit(1);
   }
 }
-
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n\n👋 Multi-account bot stopped by user. Goodbye!');
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('\n\n👋 Multi-account bot stopped. Goodbye!');
-  process.exit(0);
-});
 
 // Start the multi-account bot
 main();

@@ -151,11 +151,44 @@ class BrowserBookingBot {
   }
 
   /**
-   * Check available appointment slots
+   * Wait for calendar to load using similar approach to Python bot
+   */
+  async waitForCalendar(timeout = 15000) {
+    try {
+      // Wait for main calendar container (similar to WebDriverWait in Python)
+      await this.page.waitForSelector(
+        'table.calendar, .calendar-container, #calendar, [class*="calendar"], .date-picker, ' +
+        '.appointment-calendar, .slots-calendar, [id*="calendar"]',
+        { timeout }
+      );
+      return true;
+    } catch (error) {
+      console.log('⚠️  Calendar container not found with primary selectors');
+      // Try alternative: wait for any date-related elements
+      try {
+        await this.page.waitForSelector(
+          '[data-date], [data-day], .day, .date-cell, td[class*="day"]',
+          { timeout: 5000 }
+        );
+        return true;
+      } catch (e) {
+        console.log('⚠️  No calendar elements found on page');
+        return false;
+      }
+    }
+  }
+
+  /**
+   * Check available appointment slots using AJAX-style DOM inspection (like Python bot)
    */
   async checkAvailableSlots() {
     try {
       this.checkCount++;
+      
+      // Show progress every 100 checks (0.1s * 100 = 10 seconds)
+      if (this.checkCount % 100 === 0) {
+        console.log(`📊 Progress: ${this.checkCount} checks completed`);
+      }
       
       // Only navigate if we're on the wrong page
       const currentUrl = this.page.url();
@@ -166,109 +199,190 @@ class BrowserBookingBot {
           return [];
         }
         this.lastRefreshTime = Date.now();
+        
+        // Wait for calendar to load after navigation
+        await this.waitForCalendar();
       }
 
-      // Periodically refresh the page to get new data (every 30 seconds, not every check)
-      // This avoids the ERR_ABORTED issue while still getting fresh data
+      // Periodically refresh the page to get new data (every 60 seconds)
+      // This is similar to Python bot's full_refresh_interval
       const timeSinceRefresh = Date.now() - this.lastRefreshTime;
-      if (timeSinceRefresh > 30000) {  // 30 seconds
+      if (timeSinceRefresh > 60000) {  // 60 seconds (not too aggressive)
         try {
-          await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
+          console.log('🔄 Periodic refresh to get fresh data...');
+          await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
           this.lastRefreshTime = Date.now();
-          await this.sleep(2000); // Wait for page to settle
+          
+          // Wait for calendar to reload
+          await this.waitForCalendar();
+          await this.sleep(1000); // Brief pause for DOM to settle
         } catch (error) {
           console.log('⚠️  Refresh timeout, continuing with current page state');
         }
       }
 
-      // Try to extract slots from the page using actual TLS Contact selectors
+      // AJAX-style check: Evaluate DOM directly without reloading (like Python bot)
       const slots = await this.page.evaluate(() => {
         const availableSlots = [];
         
-        // TLS Contact uses various selectors for calendar/slots
-        // Try multiple approaches to find available slots
+        // TLS Contact calendar detection - Multiple approaches
+        // Based on common TLS Contact patterns and Python bot approach
         
-        // Method 1: Look for calendar cells with availability
+        // Method 1: Calendar table cells (most common TLS pattern)
         const calendarCells = document.querySelectorAll(
-          'td.calendar-day:not(.disabled):not(.unavailable), ' +
+          'td.day:not(.disabled):not(.unavailable):not(.out), ' +
+          'td[class*="day"]:not([class*="disabled"]):not([class*="unavailable"]), ' +
           'button.calendar-day:not(:disabled), ' +
           '.day-cell.available, ' +
+          '.calendar-day.selectable, ' +
           '[data-available="1"], ' +
-          '[data-available="true"]'
+          '[data-available="true"], ' +
+          'td.available, ' +
+          'td.open'
         );
+        
+        console.log(`Found ${calendarCells.length} potentially available calendar cells`);
         
         calendarCells.forEach(cell => {
           try {
+            // Extract date from various attributes
             const dateAttr = cell.getAttribute('data-date') || 
                            cell.getAttribute('data-day') ||
-                           cell.querySelector('[data-date]')?.getAttribute('data-date');
-            const timeSlots = cell.querySelectorAll('.time-slot.available, .slot-time:not(.disabled)');
+                           cell.getAttribute('data-value') ||
+                           cell.querySelector('[data-date]')?.getAttribute('data-date') ||
+                           cell.getAttribute('title');
+            
+            // Check for time slots within the day
+            const timeSlots = cell.querySelectorAll(
+              '.time-slot.available, .slot-time:not(.disabled), ' +
+              '[class*="time"]:not([class*="disabled"]), ' +
+              'button.time-slot:not(:disabled)'
+            );
             
             if (dateAttr && timeSlots.length > 0) {
               timeSlots.forEach(timeSlot => {
                 const time = timeSlot.textContent.trim() || timeSlot.getAttribute('data-time');
-                if (time) {
+                if (time && time.match(/\d+:\d+/)) {  // Looks like a time (HH:MM)
                   availableSlots.push({ 
                     date: dateAttr, 
                     time: time, 
-                    available: 1 
+                    available: 1,
+                    method: 'calendar-cell-with-time'
                   });
                 }
               });
-            } else if (dateAttr && !cell.classList.contains('disabled') && !cell.classList.contains('unavailable')) {
-              // Day is available but no specific time slots shown
-              availableSlots.push({ 
-                date: dateAttr, 
-                time: 'any', 
-                available: 1 
-              });
+            } else if (dateAttr) {
+              // Day appears available (no disabled class)
+              const classes = cell.className || '';
+              if (!classes.includes('disabled') && 
+                  !classes.includes('unavailable') && 
+                  !classes.includes('closed')) {
+                availableSlots.push({ 
+                  date: dateAttr, 
+                  time: 'available', 
+                  available: 1,
+                  method: 'calendar-cell-available'
+                });
+              }
             }
           } catch (e) {
-            // Skip cells that cause errors
+            // Skip problematic cells
           }
         });
 
-        // Method 2: Check for "No appointments available" message
-        const noSlotsMessages = document.querySelectorAll(
-          '.no-slots, .no-appointments, [data-testid="no-slots"]'
-        );
-        const hasNoSlotsMessage = Array.from(noSlotsMessages).some(el => 
-          el.textContent.toLowerCase().includes('no appointment') ||
-          el.textContent.toLowerCase().includes('aucun rendez-vous') ||
-          el.textContent.toLowerCase().includes('not available')
+        // Method 2: Direct appointment slot buttons/links
+        const appointmentButtons = document.querySelectorAll(
+          'button.appointment-slot:not(:disabled), ' +
+          'a.appointment-slot:not(.disabled), ' +
+          '[class*="appointment"][class*="slot"]:not([class*="disabled"]), ' +
+          '.slot:not(.disabled):not(.unavailable), ' +
+          '[onclick*="selectSlot"]:not([class*="disabled"]), ' +
+          '[onclick*="bookSlot"]:not([class*="disabled"])'
         );
         
-        // Method 3: Look for any clickable date/time elements
-        if (availableSlots.length === 0 && !hasNoSlotsMessage) {
-          const clickableSlots = document.querySelectorAll(
-            'a.appointment-slot, button.appointment-slot, ' +
-            '[onclick*="selectSlot"], [onclick*="bookSlot"]'
-          );
-          
-          clickableSlots.forEach(slot => {
-            const text = slot.textContent.trim();
-            if (text && text.length > 0) {
+        appointmentButtons.forEach(button => {
+          try {
+            const date = button.getAttribute('data-date') || button.getAttribute('data-day');
+            const time = button.getAttribute('data-time') || button.textContent.trim();
+            
+            if (date || time) {
               availableSlots.push({
-                date: text,
-                time: text,
+                date: date || 'unknown',
+                time: time || 'available',
                 available: 1,
-                element: true
+                method: 'appointment-button'
               });
             }
-          });
-        }
+          } catch (e) {
+            // Skip
+          }
+        });
 
-        return availableSlots;
+        // Method 3: Check for explicit "slots available" indicators
+        const availabilityIndicators = document.querySelectorAll(
+          '[class*="available"]:not([class*="un"]), ' +
+          '[data-has-slots="true"], ' +
+          '.has-appointments, ' +
+          '.slots-available'
+        );
+        
+        availabilityIndicators.forEach(indicator => {
+          try {
+            const date = indicator.getAttribute('data-date') || 
+                        indicator.closest('[data-date]')?.getAttribute('data-date');
+            if (date) {
+              availableSlots.push({
+                date: date,
+                time: 'available',
+                available: 1,
+                method: 'availability-indicator'
+              });
+            }
+          } catch (e) {
+            // Skip
+          }
+        });
+
+        // Method 4: Check for "No appointments" message (negative detection)
+        const noSlotsMessages = document.querySelectorAll(
+          '.no-slots, .no-appointments, .unavailable-message, ' +
+          '[class*="no"][class*="slot"], [class*="no"][class*="appointment"]'
+        );
+        
+        const hasNoSlotsMessage = Array.from(noSlotsMessages).some(el => {
+          const text = el.textContent.toLowerCase();
+          return text.includes('no appointment') ||
+                 text.includes('aucun rendez-vous') ||
+                 text.includes('no slots') ||
+                 text.includes('not available') ||
+                 text.includes('pas de rendez-vous');
+        });
+        
+        // Return both slots and whether we found a "no slots" message
+        return {
+          slots: availableSlots,
+          hasNoSlotsMessage,
+          totalFound: availableSlots.length
+        };
       });
 
-      if (slots.length > 0) {
-        console.log(`✅ Found ${slots.length} available slot(s)`);
-      } else if (this.checkCount % 100 === 0) {
-        // Log every 100 checks to show the bot is still working
-        console.log(`ℹ️  Still monitoring... (${this.checkCount} checks completed)`);
+      // Process results
+      if (slots.hasNoSlotsMessage) {
+        if (this.checkCount % 100 === 0) {
+          console.log('ℹ️  "No appointments available" message detected');
+        }
+        return [];
+      }
+
+      if (slots.totalFound > 0) {
+        console.log(`✅ Found ${slots.totalFound} available slots using methods: ${
+          [...new Set(slots.slots.map(s => s.method))].join(', ')
+        }`);
+        return slots.slots;
       }
       
-      return slots;
+      // Return empty array if no slots found
+      return [];
     } catch (error) {
       console.error('❌ Error checking slots:', error.message);
       return [];

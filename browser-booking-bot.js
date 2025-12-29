@@ -15,6 +15,8 @@ class BrowserBookingBot {
     this.browser = null;
     this.page = null;
     this.isLoggedIn = false;
+    this.lastRefreshTime = 0;
+    this.checkCount = 0;
   }
 
   /**
@@ -152,49 +154,120 @@ class BrowserBookingBot {
    * Check available appointment slots
    */
   async checkAvailableSlots() {
-    console.log('🔍 Checking available slots...');
     try {
-      // Navigate to appointment page if not there
+      this.checkCount++;
+      
+      // Only navigate if we're on the wrong page
       const currentUrl = this.page.url();
-      if (!currentUrl.includes(this.config.formGroupId)) {
-        await this.navigateToAppointmentPage();
+      if (!currentUrl.includes(this.config.formGroupId) || currentUrl.includes('login')) {
+        console.log('🔄 Navigating to appointment page...');
+        const navSuccess = await this.navigateToAppointmentPage();
+        if (!navSuccess) {
+          return [];
+        }
+        this.lastRefreshTime = Date.now();
       }
 
-      // Wait for the calendar/slot elements to load
-      await this.page.waitForSelector('.calendar, .appointment-slots, [data-testid="calendar"]', { 
-        timeout: 10000 
-      }).catch(() => console.log('⚠️  Calendar elements not found, trying alternative method...'));
+      // Periodically refresh the page to get new data (every 30 seconds, not every check)
+      // This avoids the ERR_ABORTED issue while still getting fresh data
+      const timeSinceRefresh = Date.now() - this.lastRefreshTime;
+      if (timeSinceRefresh > 30000) {  // 30 seconds
+        try {
+          await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
+          this.lastRefreshTime = Date.now();
+          await this.sleep(2000); // Wait for page to settle
+        } catch (error) {
+          console.log('⚠️  Refresh timeout, continuing with current page state');
+        }
+      }
 
-      // Try to extract slots from the page
+      // Try to extract slots from the page using actual TLS Contact selectors
       const slots = await this.page.evaluate(() => {
         const availableSlots = [];
         
-        // Try different selectors for slots
-        const slotElements = document.querySelectorAll('.available-slot, .slot[data-available="true"], .appointment-time.available');
+        // TLS Contact uses various selectors for calendar/slots
+        // Try multiple approaches to find available slots
         
-        slotElements.forEach(slot => {
-          const date = slot.getAttribute('data-date') || slot.querySelector('[data-date]')?.getAttribute('data-date');
-          const time = slot.getAttribute('data-time') || slot.querySelector('[data-time]')?.getAttribute('data-time');
-          
-          if (date && time) {
-            availableSlots.push({ date, time, available: 1 });
+        // Method 1: Look for calendar cells with availability
+        const calendarCells = document.querySelectorAll(
+          'td.calendar-day:not(.disabled):not(.unavailable), ' +
+          'button.calendar-day:not(:disabled), ' +
+          '.day-cell.available, ' +
+          '[data-available="1"], ' +
+          '[data-available="true"]'
+        );
+        
+        calendarCells.forEach(cell => {
+          try {
+            const dateAttr = cell.getAttribute('data-date') || 
+                           cell.getAttribute('data-day') ||
+                           cell.querySelector('[data-date]')?.getAttribute('data-date');
+            const timeSlots = cell.querySelectorAll('.time-slot.available, .slot-time:not(.disabled)');
+            
+            if (dateAttr && timeSlots.length > 0) {
+              timeSlots.forEach(timeSlot => {
+                const time = timeSlot.textContent.trim() || timeSlot.getAttribute('data-time');
+                if (time) {
+                  availableSlots.push({ 
+                    date: dateAttr, 
+                    time: time, 
+                    available: 1 
+                  });
+                }
+              });
+            } else if (dateAttr && !cell.classList.contains('disabled') && !cell.classList.contains('unavailable')) {
+              // Day is available but no specific time slots shown
+              availableSlots.push({ 
+                date: dateAttr, 
+                time: 'any', 
+                available: 1 
+              });
+            }
+          } catch (e) {
+            // Skip cells that cause errors
           }
         });
+
+        // Method 2: Check for "No appointments available" message
+        const noSlotsMessages = document.querySelectorAll(
+          '.no-slots, .no-appointments, [data-testid="no-slots"]'
+        );
+        const hasNoSlotsMessage = Array.from(noSlotsMessages).some(el => 
+          el.textContent.toLowerCase().includes('no appointment') ||
+          el.textContent.toLowerCase().includes('aucun rendez-vous') ||
+          el.textContent.toLowerCase().includes('not available')
+        );
+        
+        // Method 3: Look for any clickable date/time elements
+        if (availableSlots.length === 0 && !hasNoSlotsMessage) {
+          const clickableSlots = document.querySelectorAll(
+            'a.appointment-slot, button.appointment-slot, ' +
+            '[onclick*="selectSlot"], [onclick*="bookSlot"]'
+          );
+          
+          clickableSlots.forEach(slot => {
+            const text = slot.textContent.trim();
+            if (text && text.length > 0) {
+              availableSlots.push({
+                date: text,
+                time: text,
+                available: 1,
+                element: true
+              });
+            }
+          });
+        }
 
         return availableSlots;
       });
 
-      // Alternative: Check via API call interception
-      if (slots.length === 0) {
-        // Try to get slots from network requests
-        const apiSlots = await this.getSlotsViaAPI();
-        if (apiSlots.length > 0) {
-          console.log(`✅ Found ${apiSlots.length} available slots via API`);
-          return apiSlots;
-        }
+      if (slots.length > 0) {
+        console.log(`✅ Found ${slots.length} available slot(s)`);
+      } else if (this.checkCount % 100 === 0) {
+        // Log every 100 checks to show the bot is still working
+        console.log(`ℹ️  Still monitoring... (${this.checkCount} checks completed)`);
       }
-
-      console.log(`✅ Found ${slots.length} available slots`);
+      
       return slots;
     } catch (error) {
       console.error('❌ Error checking slots:', error.message);
@@ -203,57 +276,14 @@ class BrowserBookingBot {
   }
 
   /**
-   * Get slots via intercepted API calls
+   * Get slots via intercepted API calls (DEPRECATED - causes page reload issues)
+   * Keeping for reference but not used
    */
   async getSlotsViaAPI() {
-    try {
-      // Enable request interception
-      await this.page.setRequestInterception(true);
-      
-      let slotsData = null;
-      
-      // Intercept API responses
-      this.page.on('response', async (response) => {
-        const url = response.url();
-        if (url.includes('/api/tls/appointment') || url.includes('/table')) {
-          try {
-            const contentType = response.headers()['content-type'];
-            if (contentType && contentType.includes('application/json')) {
-              const data = await response.json();
-              if (data && typeof data === 'object') {
-                slotsData = data;
-              }
-            }
-          } catch (e) {
-            // Ignore parsing errors
-          }
-        }
-      });
-
-      // Trigger a refresh or navigation to get new data
-      await this.page.reload({ waitUntil: 'networkidle2' });
-      
-      // Wait a bit for API calls
-      await this.sleep(3000);
-      
-      // Parse slots data
-      if (slotsData) {
-        const availableSlots = [];
-        for (const date in slotsData) {
-          for (const time in slotsData[date]) {
-            if (slotsData[date][time] > 0) {
-              availableSlots.push({ date, time, available: slotsData[date][time] });
-            }
-          }
-        }
-        return availableSlots;
-      }
-      
-      return [];
-    } catch (error) {
-      console.error('❌ Error getting slots via API:', error.message);
-      return [];
-    }
+    // This method is deprecated as it causes ERR_ABORTED issues
+    // when checking slots rapidly (every 100ms for PRIMARY account)
+    // The main checkAvailableSlots() method now handles detection directly
+    return [];
   }
 
   /**
